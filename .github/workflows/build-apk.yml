@@ -3,9 +3,8 @@ name: Build DEADLAND Android APK
 
 on:
   push:
-    branches: [main]
-  pull_request:
-    branches: [main]
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -15,7 +14,7 @@ jobs:
   build:
     name: Build Release APK
     runs-on: ubuntu-latest
-    timeout-minutes: 40
+    timeout-minutes: 45
 
     steps:
       - name: Checkout repository
@@ -33,18 +32,39 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Check Flutter project
+      - name: Print tool versions
         run: |
+          flutter --version
+          java -version
+
+      - name: Validate Flutter project
+        shell: bash
+        run: |
+          set -e
           test -f pubspec.yaml || {
-            echo "::error::pubspec.yaml not found"
+            echo "::error::pubspec.yaml is missing"
             exit 1
           }
+          test -d lib || {
+            echo "::error::lib directory is missing"
+            exit 1
+          }
+
+      - name: Generate missing Android platform
+        shell: bash
+        run: |
+          if [ ! -f android/app/build.gradle.kts ] && \
+             [ ! -f android/app/build.gradle ]; then
+            flutter create --platforms=android .
+          fi
 
       - name: Repair missing Gradle wrapper
         shell: bash
         run: |
-          if [ ! -f android/gradlew ]; then
-            echo "Gradle wrapper is missing; generating a temporary Flutter Android scaffold."
+          set -e
+
+          if [ ! -f android/gradlew ] || \
+             [ ! -f android/gradle/wrapper/gradle-wrapper.properties ]; then
 
             mkdir -p /tmp/flutter-wrapper-seed
 
@@ -63,13 +83,106 @@ jobs:
             chmod +x android/gradlew
           fi
 
-      - name: Install dependencies
+      - name: Fix Android Gradle Plugin version
+        shell: bash
+        run: |
+          set -e
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          files = [
+              Path("android/settings.gradle.kts"),
+              Path("android/settings.gradle"),
+          ]
+
+          found = False
+
+          for path in files:
+              if not path.exists():
+                  continue
+
+              text = path.read_text(encoding="utf-8")
+
+              if "com.android.application" not in text:
+                  continue
+
+              updated = re.sub(
+                  r'(?m)(id\s*\(?\s*["\']com\.android\.application["\']\s*\)?\s+version\s+["\'])[^"\']+(["\'])',
+                  r'\g<1>8.11.1\2',
+                  text
+              )
+
+              if updated != text:
+                  path.write_text(updated, encoding="utf-8")
+
+              text = path.read_text(encoding="utf-8")
+
+              if re.search(
+                  r'com\.android\.application["\']?\s*\)?\s+version\s+["\']8\.11\.1["\']',
+                  text
+              ):
+                  found = True
+                  print(f"AGP 8.11.1 configured in {path}")
+
+          if not found:
+              print("Could not verify AGP version in settings files.")
+              for path in files:
+                  if path.exists():
+                      print(f"\n--- {path} ---")
+                      print(path.read_text(encoding="utf-8"))
+              raise SystemExit(
+                  "Android Gradle Plugin version could not be updated safely."
+              )
+          PY
+
+      - name: Configure Gradle wrapper
+        shell: bash
+        run: |
+          set -e
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          path = Path("android/gradle/wrapper/gradle-wrapper.properties")
+          text = path.read_text(encoding="utf-8")
+
+          text, count = re.subn(
+              r"(?m)^distributionUrl=.*$",
+              r"distributionUrl=https\\://services.gradle.org/distributions/gradle-8.13-all.zip",
+              text
+          )
+
+          if count == 0:
+              raise SystemExit("distributionUrl was not found.")
+
+          path.write_text(text, encoding="utf-8")
+          print(text)
+          PY
+
+      - name: Install Flutter dependencies
         run: flutter pub get
+
+      - name: Verify Android configuration
+        shell: bash
+        run: |
+          echo "=== AGP configuration ==="
+          grep -n "com.android.application" \
+            android/settings.gradle.kts android/settings.gradle 2>/dev/null || true
+
+          echo "=== Gradle wrapper ==="
+          cat android/gradle/wrapper/gradle-wrapper.properties
+
+          echo "=== Wrapper version ==="
+          cd android
+          ./gradlew --version
 
       - name: Build release APK
         run: flutter build apk --release
 
-      - name: Upload APK
+      - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: DEADLAND-AFTER-ZERO-APK
