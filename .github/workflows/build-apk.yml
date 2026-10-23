@@ -32,25 +32,20 @@ jobs:
           channel: stable
           cache: true
 
-      - name: Print tool versions
-        run: |
-          flutter --version
-          java -version
-
-      - name: Validate Flutter project
+      - name: Check Flutter project
         shell: bash
         run: |
           set -e
           test -f pubspec.yaml || {
-            echo "::error::pubspec.yaml is missing"
+            echo "::error::pubspec.yaml not found"
             exit 1
           }
           test -d lib || {
-            echo "::error::lib directory is missing"
+            echo "::error::lib directory not found"
             exit 1
           }
 
-      - name: Generate missing Android platform
+      - name: Generate Android platform if missing
         shell: bash
         run: |
           if [ ! -f android/app/build.gradle.kts ] && \
@@ -58,7 +53,7 @@ jobs:
             flutter create --platforms=android .
           fi
 
-      - name: Repair missing Gradle wrapper
+      - name: Repair Gradle wrapper if missing
         shell: bash
         run: |
           set -e
@@ -83,7 +78,7 @@ jobs:
             chmod +x android/gradlew
           fi
 
-      - name: Fix Android Gradle Plugin version
+      - name: Set compatible Android Gradle Plugin
         shell: bash
         run: |
           set -e
@@ -92,52 +87,48 @@ jobs:
           from pathlib import Path
           import re
 
-          files = [
+          candidates = [
               Path("android/settings.gradle.kts"),
               Path("android/settings.gradle"),
           ]
 
           found = False
 
-          for path in files:
+          for path in candidates:
               if not path.exists():
                   continue
 
-              text = path.read_text(encoding="utf-8")
+              content = path.read_text(encoding="utf-8")
 
-              if "com.android.application" not in text:
-                  continue
-
-              updated = re.sub(
-                  r'(?m)(id\s*\(?\s*["\']com\.android\.application["\']\s*\)?\s+version\s+["\'])[^"\']+(["\'])',
-                  r'\g<1>8.11.1\2',
-                  text
+              pattern = (
+                  r'((?:id\("com\.android\.application"\)|'
+                  r'id\s*\(?\s*[\'"]com\.android\.application[\'"]\s*\)?)'
+                  r'\s+version\s+")[^"]+(")'
               )
 
-              if updated != text:
+              updated, count = re.subn(
+                  pattern,
+                  r'\g<1>8.11.1\2',
+                  content
+              )
+
+              if count:
                   path.write_text(updated, encoding="utf-8")
-
-              text = path.read_text(encoding="utf-8")
-
-              if re.search(
-                  r'com\.android\.application["\']?\s*\)?\s+version\s+["\']8\.11\.1["\']',
-                  text
-              ):
                   found = True
-                  print(f"AGP 8.11.1 configured in {path}")
+                  print(f"Updated AGP in {path}")
 
           if not found:
-              print("Could not verify AGP version in settings files.")
-              for path in files:
+              for path in candidates:
                   if path.exists():
                       print(f"\n--- {path} ---")
                       print(path.read_text(encoding="utf-8"))
+
               raise SystemExit(
-                  "Android Gradle Plugin version could not be updated safely."
+                  "Could not safely find Android application plugin version."
               )
           PY
 
-      - name: Configure Gradle wrapper
+      - name: Set compatible Gradle version
         shell: bash
         run: |
           set -e
@@ -146,43 +137,54 @@ jobs:
           from pathlib import Path
           import re
 
-          path = Path("android/gradle/wrapper/gradle-wrapper.properties")
-          text = path.read_text(encoding="utf-8")
-
-          text, count = re.subn(
-              r"(?m)^distributionUrl=.*$",
-              r"distributionUrl=https\\://services.gradle.org/distributions/gradle-8.13-all.zip",
-              text
+          path = Path(
+              "android/gradle/wrapper/gradle-wrapper.properties"
           )
 
-          if count == 0:
-              raise SystemExit("distributionUrl was not found.")
+          if not path.exists():
+              raise SystemExit("Gradle wrapper properties file is missing.")
 
-          path.write_text(text, encoding="utf-8")
-          print(text)
+          content = path.read_text(encoding="utf-8")
+
+          updated, count = re.subn(
+              r"(?m)^distributionUrl=.*$",
+              r"distributionUrl=https\\://services.gradle.org/distributions/gradle-8.14.3-all.zip",
+              content
+          )
+
+          if count != 1:
+              raise SystemExit(
+                  "Expected exactly one Gradle distributionUrl."
+              )
+
+          path.write_text(updated, encoding="utf-8")
+          print(path.read_text(encoding="utf-8"))
           PY
 
-      - name: Install Flutter dependencies
+      - name: Install dependencies
         run: flutter pub get
 
-      - name: Verify Android configuration
+      - name: Verify Android build configuration
         shell: bash
         run: |
-          echo "=== AGP configuration ==="
-          grep -n "com.android.application" \
-            android/settings.gradle.kts android/settings.gradle 2>/dev/null || true
+          set -e
 
-          echo "=== Gradle wrapper ==="
+          echo "=== Android Gradle Plugin ==="
+          grep -n "com.android.application" \
+            android/settings.gradle.kts android/settings.gradle \
+            2>/dev/null || true
+
+          echo "=== Gradle wrapper configuration ==="
           cat android/gradle/wrapper/gradle-wrapper.properties
 
-          echo "=== Wrapper version ==="
+          echo "=== Actual Gradle version ==="
           cd android
           ./gradlew --version
 
       - name: Build release APK
         run: flutter build apk --release
 
-      - name: Upload APK artifact
+      - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: DEADLAND-AFTER-ZERO-APK
