@@ -1,0 +1,78 @@
+
+name: Build DEADLAND Android APK
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build Release APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+
+      - name: Check Flutter project
+        run: |
+          test -f pubspec.yaml || {
+            echo "::error::pubspec.yaml not found"
+            exit 1
+          }
+
+      - name: Repair missing Gradle wrapper
+        shell: bash
+        run: |
+          if [ ! -f android/gradlew ]; then
+            echo "Gradle wrapper is missing; generating a temporary Flutter Android scaffold."
+
+            mkdir -p /tmp/flutter-wrapper-seed
+
+            flutter create \
+              --platforms=android \
+              --project-name wrapperseed \
+              /tmp/flutter-wrapper-seed
+
+            mkdir -p android/gradle/wrapper
+
+            cp /tmp/flutter-wrapper-seed/android/gradlew android/
+            cp /tmp/flutter-wrapper-seed/android/gradlew.bat android/
+            cp -r /tmp/flutter-wrapper-seed/android/gradle/wrapper/. \
+              android/gradle/wrapper/
+
+            chmod +x android/gradlew
+          fi
+
+      - name: Install dependencies
+        run: flutter pub get
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: DEADLAND-AFTER-ZERO-APK
+          path: build/app/outputs/flutter-apk/app-release.apk
+          if-no-files-found: error
+          retention-days: 14
