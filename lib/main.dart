@@ -1287,9 +1287,18 @@ class _DemoScreenState extends State<DemoScreen>
                           ),
                         ),
                       if (_bagOpen && !_dead)
-                        Align(
-                          alignment: const Alignment(0, 0.25),
-                          child: _bagPanel(),
+                        // Keep the backpack between the pause button (top)
+                        // and the quick bar (bottom) so both stay tappable
+                        // on short landscape screens.
+                        Positioned(
+                          left: 0,
+                          right: 0,
+                          top: 52,
+                          bottom: 64,
+                          child: Align(
+                            alignment: const Alignment(0, 0.4),
+                            child: _bagPanel(),
+                          ),
                         ),
                       if (_target case final t?)
                         Align(
