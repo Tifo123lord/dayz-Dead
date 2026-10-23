@@ -1,0 +1,5 @@
+package com.deadlandafterzero.game
+
+import io.flutter.embedding.android.FlutterActivity
+
+class MainActivity : FlutterActivity()
