@@ -14,7 +14,7 @@ jobs:
   build:
     name: Build Release APK
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - name: Checkout repository
@@ -48,6 +48,8 @@ jobs:
       - name: Generate Android platform if missing
         shell: bash
         run: |
+          set -e
+
           if [ ! -f android/app/build.gradle.kts ] && \
              [ ! -f android/app/build.gradle ]; then
             flutter create --platforms=android .
@@ -92,6 +94,11 @@ jobs:
               Path("android/settings.gradle"),
           ]
 
+          pattern = (
+              r'(id\s*\(?\s*["\']com\.android\.application["\']\s*\)?'
+              r'\s+version\s+["\'])[^"\']+(["\'])'
+          )
+
           found = False
 
           for path in candidates:
@@ -99,13 +106,6 @@ jobs:
                   continue
 
               content = path.read_text(encoding="utf-8")
-
-              pattern = (
-                  r'((?:id\("com\.android\.application"\)|'
-                  r'id\s*\(?\s*[\'"]com\.android\.application[\'"]\s*\)?)'
-                  r'\s+version\s+")[^"]+(")'
-              )
-
               updated, count = re.subn(
                   pattern,
                   r'\g<1>8.11.1\2',
@@ -114,17 +114,67 @@ jobs:
 
               if count:
                   path.write_text(updated, encoding="utf-8")
+                  print(f"Updated Android Gradle Plugin in {path}")
                   found = True
-                  print(f"Updated AGP in {path}")
 
           if not found:
+              raise SystemExit(
+                  "Could not find Android application plugin version."
+              )
+          PY
+
+      - name: Set compatible Kotlin version
+        shell: bash
+        run: |
+          set -e
+
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          candidates = [
+              Path("android/settings.gradle.kts"),
+              Path("android/settings.gradle"),
+          ]
+
+          patterns = [
+              r'(id\s*\(?\s*["\']org\.jetbrains\.kotlin\.android["\']'
+              r'\s*\)?\s+version\s+["\'])[^"\']+(["\'])',
+              r'(id\s*\(?\s*["\']kotlin-android["\']'
+              r'\s*\)?\s+version\s+["\'])[^"\']+(["\'])',
+          ]
+
+          found = False
+
+          for path in candidates:
+              if not path.exists():
+                  continue
+
+              content = path.read_text(encoding="utf-8")
+
+              for pattern in patterns:
+                  updated, count = re.subn(
+                      pattern,
+                      r'\g<1>2.2.20\2',
+                      content
+                  )
+
+                  if count:
+                      content = updated
+                      found = True
+
+              if found:
+                  path.write_text(content, encoding="utf-8")
+                  print(f"Updated Kotlin version in {path}")
+
+          if not found:
+              print("Kotlin plugin version was not found in settings files.")
               for path in candidates:
                   if path.exists():
                       print(f"\n--- {path} ---")
                       print(path.read_text(encoding="utf-8"))
-
               raise SystemExit(
-                  "Could not safely find Android application plugin version."
+                  "Could not safely update Kotlin plugin version."
               )
           PY
 
@@ -148,7 +198,7 @@ jobs:
 
           updated, count = re.subn(
               r"(?m)^distributionUrl=.*$",
-              r"distributionUrl=https\\://services.gradle.org/distributions/gradle-8.14.3-all.zip",
+              r"distributionUrl=https\://services.gradle.org/distributions/gradle-8.14.3-all.zip",
               content
           )
 
@@ -161,7 +211,7 @@ jobs:
           print(path.read_text(encoding="utf-8"))
           PY
 
-      - name: Install dependencies
+      - name: Install Flutter dependencies
         run: flutter pub get
 
       - name: Verify Android build configuration
@@ -169,20 +219,38 @@ jobs:
         run: |
           set -e
 
-          echo "=== Android Gradle Plugin ==="
+          echo "===== Android Gradle Plugin ====="
           grep -n "com.android.application" \
             android/settings.gradle.kts android/settings.gradle \
             2>/dev/null || true
 
-          echo "=== Gradle wrapper configuration ==="
+          echo "===== Kotlin plugin ====="
+          grep -nE "kotlin.android|kotlin-android" \
+            android/settings.gradle.kts android/settings.gradle \
+            2>/dev/null || true
+
+          echo "===== Gradle wrapper ====="
           cat android/gradle/wrapper/gradle-wrapper.properties
 
-          echo "=== Actual Gradle version ==="
+          echo "===== Gradle version ====="
           cd android
           ./gradlew --version
 
       - name: Build release APK
         run: flutter build apk --release
+
+      - name: Verify APK exists
+        shell: bash
+        run: |
+          set -e
+          APK="build/app/outputs/flutter-apk/app-release.apk"
+
+          if [ ! -s "$APK" ]; then
+            echo "::error::Release APK was not generated."
+            exit 1
+          fi
+
+          ls -lh "$APK"
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
