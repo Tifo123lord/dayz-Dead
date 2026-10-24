@@ -210,18 +210,11 @@ class _SfxPool {
     int voices, {
     this.baseVolume = 1.0,
     this.ambient = false,
-  }) : _players = List.generate(voices, (_) => AudioPlayer()) {
-    for (final p in _players) {
-      p.setReleaseMode(ReleaseMode.stop);
-      p.setVolume(baseVolume);
-      p.setSource(AssetSource(asset));
-    }
-  }
+  }) : _g = SfxGroup('assets/$asset', voices: voices);
 
-  final List<AudioPlayer> _players;
+  final SfxGroup _g;
   final double baseVolume;
   final bool ambient; // follows the "ambient" volume setting
-  int _next = 0;
   double lastPlay = -100;
 
   /// [pan] -1 (left) .. 1 (right); [rate] playback speed (pitch).
@@ -234,34 +227,15 @@ class _SfxPool {
   }) {
     if (now - lastPlay < minGap) return;
     lastPlay = now;
-    final p = _players[_next];
-    _next = (_next + 1) % _players.length;
     final user = ambient ? Profile.i.ambientVolume : Profile.i.sfxVolume;
     final v = (baseVolume * volume * user).clamp(0.0, 1.0);
     if (v <= 0.001) return;
-    p.stop().then((_) async {
-      try {
-        await p.setVolume(v);
-        await p.setBalance(pan.clamp(-1.0, 1.0));
-        await p.setPlaybackRate(rate);
-      } catch (_) {
-        // Some platforms do not support balance/rate - play anyway.
-      }
-      await p.resume();
-    });
+    _g.play(volume: v, pan: pan, rate: rate);
   }
 
-  void stopAll() {
-    for (final p in _players) {
-      p.stop();
-    }
-  }
+  void stopAll() => _g.stop();
 
-  void dispose() {
-    for (final p in _players) {
-      p.dispose();
-    }
-  }
+  void dispose() => _g.dispose();
 }
 
 class _ZombieAudio {

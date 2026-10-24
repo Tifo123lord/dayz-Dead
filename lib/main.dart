@@ -4,7 +4,8 @@ import 'dart:math' as math;
 import 'dart:ui' as ui;
 
 import 'package:audioplayers/audioplayers.dart';
-import 'package:flutter/foundation.dart' show kIsWeb;
+import 'package:flutter/foundation.dart'
+    show kIsWeb, defaultTargetPlatform, TargetPlatform;
 import 'package:flutter/material.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
@@ -19,9 +20,12 @@ part 'skins.dart';
 part 'music.dart';
 part 'survival.dart';
 part 'characters.dart';
+part 'audio.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  // Audio context first: every AudioPlayer copies it when it is created.
+  await GameAudio.configure();
   await Profile.i.load();
   SystemChrome.setPreferredOrientations([
     DeviceOrientation.landscapeLeft,
@@ -29,6 +33,8 @@ Future<void> main() async {
   ]);
   SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
   runApp(const DeadlandApp());
+  // Decode all sound effects into the native mixer in the background.
+  GameAudio.preload();
   MenuMusic.init();
 }
 
@@ -165,14 +171,26 @@ class _DemoScreenState extends State<DemoScreen>
   final math.Random _rng = math.Random();
 
   // Audio
-  final AudioPlayer _steps = AudioPlayer();
-  final List<AudioPlayer> _shots = List.generate(
+  final _SfxPool _steps = _SfxPool('audio/footstep.wav', 2, baseVolume: 0.55);
+  final _SfxPool _shots = _SfxPool(
+    'audio/ak47_shot.wav',
     _shotVoices,
-    (_) => AudioPlayer(),
+    baseVolume: 0.9,
   );
-  int _shotVoice = 0;
-  final AudioPlayer _reloadSfx = AudioPlayer();
-  final AudioPlayer _stepsMetro = AudioPlayer();
+  final _SfxPool _reloadSfx = _SfxPool(
+    'audio/ak47_reload.wav',
+    1,
+    baseVolume: 0.9,
+  );
+  final _SfxPool _stepsMetro = _SfxPool(
+    'audio/footstep_metro.mp3',
+    2,
+    baseVolume: 0.6,
+  );
+
+  /// Repaints only the world canvas every frame (no widget rebuild).
+  final ValueNotifier<int> _frameTick = ValueNotifier<int>(0);
+  double _hudIn = 0; // throttles the HUD widget rebuilds
   final _WorldAudio _wa = _WorldAudio();
 
   final AudioPlayer _forestLoop = AudioPlayer();
@@ -330,20 +348,7 @@ class _DemoScreenState extends State<DemoScreen>
     super.initState();
     MenuMusic.enterGame();
     _loadImages();
-    _steps.setReleaseMode(ReleaseMode.stop);
-    _steps.setVolume(0.55 * Profile.i.sfxVolume);
-    _steps.setSource(AssetSource('audio/footstep.wav'));
-    for (final p in _shots) {
-      p.setReleaseMode(ReleaseMode.stop);
-      p.setVolume(0.9 * Profile.i.sfxVolume);
-      p.setSource(AssetSource('audio/ak47_shot.wav'));
-    }
-    _reloadSfx.setReleaseMode(ReleaseMode.stop);
-    _reloadSfx.setVolume(0.9 * Profile.i.sfxVolume);
-    _reloadSfx.setSource(AssetSource('audio/ak47_reload.wav'));
-    _stepsMetro.setReleaseMode(ReleaseMode.stop);
-    _stepsMetro.setVolume(0.6 * Profile.i.sfxVolume);
-    _stepsMetro.setSource(AssetSource('audio/footstep_metro.mp3'));
+    GameAudio.preload();
     _initLamps();
     _initRain();
     var save = Profile.i.survivor;
@@ -647,7 +652,7 @@ class _DemoScreenState extends State<DemoScreen>
     if (_ammo == _gun.mag || _reserve == 0) return;
     _reloadLeft = _reloadTime;
     if (_weapon == Weapon.ak) {
-      _reloadSfx.stop().then((_) => _reloadSfx.resume());
+      _reloadSfx.play(_clock);
     } else {
       _wa.deagleReload.play(_clock);
     }
@@ -664,7 +669,7 @@ class _DemoScreenState extends State<DemoScreen>
     if (w == _weapon || _dead || _travelT >= 0) return;
     // Cancel a reload in progress.
     _reloadLeft = 0;
-    _reloadSfx.stop();
+    _reloadSfx.stopAll();
     _wa.deagleReload.stopAll();
     _weapon = w;
     _switchLeft = 0.35;
@@ -805,9 +810,7 @@ class _DemoScreenState extends State<DemoScreen>
       );
     }
 
-    final p = _shots[_shotVoice];
-    _shotVoice = (_shotVoice + 1) % _shots.length;
-    p.stop().then((_) => p.resume());
+    _shots.play(_clock, rate: 0.97 + _rng.nextDouble() * 0.06);
   }
 
   void _updateParticles(double dt) {
@@ -941,13 +944,15 @@ class _DemoScreenState extends State<DemoScreen>
   }
 
   void _playStep() {
-    final p = _area == Area.metro ? _stepsMetro : _steps;
-    p.stop().then((_) => p.resume());
+    (_area == Area.metro ? _stepsMetro : _steps).play(
+      _clock,
+      rate: 0.95 + _rng.nextDouble() * 0.1,
+    );
   }
 
   void _stopSteps() {
-    _steps.stop();
-    _stepsMetro.stop();
+    _steps.stopAll();
+    _stepsMetro.stopAll();
   }
 
   @override
@@ -963,10 +968,9 @@ class _DemoScreenState extends State<DemoScreen>
     _forestLoop.dispose();
     MenuMusic.leaveGame();
     _ticker.dispose();
+    _frameTick.dispose();
     _steps.dispose();
-    for (final p in _shots) {
-      p.dispose();
-    }
+    _shots.dispose();
     _reloadSfx.dispose();
     _stepsMetro.dispose();
     _wa.dispose();

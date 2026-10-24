@@ -122,14 +122,8 @@ extension _SessionLogic on _DemoScreenState {
   }
 
   void _applyVolumes() {
-    final v = Profile.i.sfxVolume;
-    _steps.setVolume(0.55 * v);
-    for (final p in _shots) {
-      p.setVolume(0.9 * v);
-    }
-    _reloadSfx.setVolume(0.9 * v);
-    _stepsMetro.setVolume(0.6 * v);
-    _forestLoop.setVolume(0.55 * Profile.i.ambientVolume);
+    // Effects read the volume settings on every play; only the loop needs it.
+    _forestLoop.setVolume(0.55 * Profile.i.ambientVolume).catchError((_) {});
   }
 
   Widget _statsRow() {
